@@ -1,0 +1,32 @@
+services:
+  app:
+    build: .
+    container_name: notification-service
+    command: gunicorn notification.wsgi:application --bind 0.0.0.0:8000
+    volumes:
+      - .:/app
+    env_file:
+      - .env
+    environment:
+      - DJANGO_DB_HOST=db
+      - DJANGO_DB_NAME=notification_db
+      - DJANGO_DB_USER=notification_user
+      - DJANGO_DB_PASSWORD=othersecretpassword
+    ports:
+      - "8006:8000"
+    depends_on:
+      - db
+
+  db:
+    image: postgres:15-alpine
+    container_name: postgres-notification-service
+    restart: always
+    environment:
+      POSTGRES_DB: notification_db
+      POSTGRES_USER: notification_user
+      POSTGRES_PASSWORD: othersecretpassword
+    volumes:
+      - postgres-notification-data:/var/lib/postgresql/data
+
+volumes:
+  postgres-notification-data:
