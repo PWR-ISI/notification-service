@@ -1,0 +1,6 @@
+
+# Add Python package requirements for notification-service here
+# Example:
+# Django>=4.2
+Django>=4.2
+gunicorn>=20.1.0
