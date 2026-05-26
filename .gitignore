@@ -15,3 +15,8 @@ local_settings.py
 .vscode/
 .idea/
 .env
+
+# Local test artifacts (Google Calendar e2e dev flow)
+jwt.txt
+payload.json
+*.payload.json

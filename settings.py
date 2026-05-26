@@ -69,3 +69,53 @@ REST_FRAMEWORK = {
 
 SIMPLE_JWT = {'ACCESS_TOKEN_LIFETIME': timedelta(hours=1), 'ALGORITHM': 'HS256', 'SIGNING_KEY': SECRET_KEY}
 CORS_ALLOWED_ORIGINS = os.getenv('CORS_ALLOWED_ORIGINS', 'http://localhost:3000,http://127.0.0.1:3000').split(',')
+
+SPECTACULAR_SETTINGS = {
+    'TITLE': 'Notification Service API',
+    'DESCRIPTION': 'Notifications, preferences, and Google Calendar integration.',
+    'VERSION': '2.0.0',
+    'SERVE_INCLUDE_SCHEMA': False,
+}
+
+# ── Domain-event consumer ─────────────────────────────────────────────────────
+# SQS queue the background worker drains. Populated by SNS subscriptions
+# (payment-service publishes payment.success here via SNS→SQS fan-out).
+EVENTS_SQS_QUEUE_URL = os.getenv('EVENTS_SQS_QUEUE_URL', '')
+
+# Sibling services we call to enrich thin events (payment.success carries only
+# IDs; we resolve the appointment + parties via these REST endpoints).
+APPOINTMENT_SERVICE_URL = os.getenv('APPOINTMENT_SERVICE_URL', 'http://appointment-service:8000')
+AUTH_SERVICE_URL        = os.getenv('AUTH_SERVICE_URL',        'http://auth-identity-service:8000')
+
+# Internal service-to-service auth header — apps pass this so calls to the
+# above services don't need a per-user JWT. The consuming service validates it.
+INTERNAL_SERVICE_TOKEN = os.getenv('INTERNAL_SERVICE_TOKEN', '')
+
+# ── Google Calendar OAuth2 ────────────────────────────────────────────────────
+# Created in Google Cloud Console → APIs & Services → Credentials.
+# Redirect URI must exactly match what's registered there.
+GOOGLE_OAUTH_CLIENT_ID     = os.getenv('GOOGLE_OAUTH_CLIENT_ID', '')
+GOOGLE_OAUTH_CLIENT_SECRET = os.getenv('GOOGLE_OAUTH_CLIENT_SECRET', '')
+GOOGLE_OAUTH_REDIRECT_URI  = os.getenv('GOOGLE_OAUTH_REDIRECT_URI', 'http://localhost:8003/api/v2/google/callback')
+GOOGLE_OAUTH_SCOPES = [
+    'https://www.googleapis.com/auth/calendar.events',
+    'https://www.googleapis.com/auth/userinfo.email',
+    'openid',
+]
+
+# Fernet key for at-rest encryption of refresh tokens. Generate once with:
+#   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+# Production MUST inject this from AWS Secrets Manager; missing key with
+# DEBUG=False raises at OAuth callback time (fails loud, refuses plaintext).
+GOOGLE_TOKEN_ENCRYPTION_KEY = os.getenv('GOOGLE_TOKEN_ENCRYPTION_KEY', '')
+
+if DEBUG and not GOOGLE_TOKEN_ENCRYPTION_KEY:
+    # Dev / pytest convenience: auto-generate an ephemeral key so the OAuth
+    # code path doesn't crash. Tokens encrypted with it won't survive a
+    # process restart — that's expected in this mode.
+    from cryptography.fernet import Fernet as _Fernet
+    GOOGLE_TOKEN_ENCRYPTION_KEY = _Fernet.generate_key().decode()
+
+# Calendar IDs — 'primary' targets each user's main calendar. Override for a
+# shared clinic calendar in env if desired.
+GOOGLE_CALENDAR_ID_DEFAULT = os.getenv('GOOGLE_CALENDAR_ID_DEFAULT', 'primary')
