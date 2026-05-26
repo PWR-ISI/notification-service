@@ -80,3 +80,40 @@ class NotificationPreference(models.Model):
 
     def __str__(self):
         return f"Preferences for user {self.user_id}"
+
+
+class GoogleCalendarCredential(models.Model):
+    """
+    Per-user OAuth2 credentials for Google Calendar.
+
+    The refresh token is encrypted at rest using Fernet (symmetric AES). The
+    key lives in settings.GOOGLE_TOKEN_ENCRYPTION_KEY and is injected via env
+    var (AWS Secrets Manager in prod). We deliberately do NOT store the
+    short-lived access token — it's re-derived from the refresh token on each
+    use, keeping the blast radius of a DB leak narrower.
+
+    `revoked_at` is set when the user disconnects or Google rejects the
+    refresh token (e.g. user revoked the grant in their Google account). A
+    revoked row is kept for audit instead of being deleted.
+    """
+    user_id              = models.IntegerField(unique=True, db_index=True)
+    google_account_email = models.EmailField()
+    # Fernet ciphertexts are bytes; TextField stores the base64-urlsafe
+    # representation as written by Fernet.encrypt().
+    encrypted_refresh_token = models.TextField()
+    calendar_id          = models.CharField(max_length=255, default='primary')
+    scopes               = models.JSONField(default=list)
+    revoked_at           = models.DateTimeField(null=True, blank=True)
+    created_at           = models.DateTimeField(auto_now_add=True)
+    updated_at           = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'google_calendar_credentials'
+
+    def __str__(self):
+        state = 'revoked' if self.revoked_at else 'active'
+        return f"GCal[{state}] user={self.user_id} ({self.google_account_email})"
+
+    @property
+    def is_active(self) -> bool:
+        return self.revoked_at is None

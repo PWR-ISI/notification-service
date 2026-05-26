@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pwr-isi.local/schemas/payment_success.schema.json",
+  "title": "PaymentSuccessEvent",
+  "description": "Envelope-less payload published by payment-service to SQS `payment-success` (or to SNS topic that fans out to notification-service inbox). Field names match `payment-service/payment/services.py::publish_payment_success`.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["event", "payment_id", "order_id", "appointment_id", "patient_id", "amount", "currency", "completed_at"],
+  "properties": {
+    "event":          {"type": "string", "const": "payment.success"},
+    "payment_id":     {"type": "string", "minLength": 1},
+    "order_id":       {"type": "string", "minLength": 1},
+    "appointment_id": {"type": "string", "pattern": "^[0-9]+$"},
+    "patient_id":     {"type": "string", "pattern": "^[0-9]+$"},
+    "amount":         {"type": "string", "pattern": "^[0-9]+(\\.[0-9]+)?$"},
+    "currency":       {"type": "string", "minLength": 3, "maxLength": 3},
+    "completed_at":   {"type": "string", "format": "date-time"}
+  }
+}
