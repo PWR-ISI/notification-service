@@ -20,9 +20,16 @@ fi
 
 # Run migrations
 echo "Running Django migrations..."
+python manage.py makemigrations api --noinput
 python manage.py migrate --noinput
 
 echo "Entrypoint setup complete, starting application..."
+
+# Start SQS event consumer in background (per-user dynamic email notifications)
+if [ -n "$EVENTS_SQS_QUEUE_URL" ]; then
+    python manage.py consume_events &
+    echo "SQS consumer started (pid $!)"
+fi
 
 # Start the application
 gunicorn --bind 0.0.0.0:8000 --workers 2 --timeout 120 --access-logfile - --error-logfile - notification.wsgi:application

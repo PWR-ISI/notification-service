@@ -157,7 +157,245 @@ def _ical_uid(appointment_id: int, role: str) -> str:
     return f"appointment-{appointment_id}-{role}@notification-service.pwr-isi"
 
 
+# ── appointment.created handler ───────────────────────────────────────────────
+def _get_user_email_from_cognito(patient_id: str) -> str | None:
+    """Look up user email in Cognito by sub (patient_id)."""
+    import boto3
+    import os
+    pool_id = os.getenv('COGNITO_USER_POOL_ID', '')
+    if not pool_id:
+        return None
+    try:
+        cognito = boto3.client('cognito-idp', region_name=os.getenv('AWS_REGION', 'us-east-1'))
+        resp = cognito.list_users(
+            UserPoolId=pool_id,
+            Filter=f'sub = "{patient_id}"',
+        )
+        for user in resp.get('Users', []):
+            for attr in user.get('Attributes', []):
+                if attr['Name'] == 'email':
+                    return attr['Value']
+    except Exception as exc:
+        logger.error("Cognito lookup failed for patient_id=%s: %s", patient_id, exc)
+    return None
+
+
+def _send_email_via_ses(to_email: str, subject: str, body: str) -> None:
+    import boto3
+    import os
+    sender = os.getenv('SENDER_EMAIL', '')
+    if not sender:
+        logger.warning("SENDER_EMAIL not configured; skipping email to %s", to_email)
+        return
+    ses = boto3.client('ses', region_name=os.getenv('AWS_REGION', 'us-east-1'))
+    ses.send_email(
+        Source=sender,
+        Destination={'ToAddresses': [to_email]},
+        Message={
+            'Subject': {'Data': subject, 'Charset': 'UTF-8'},
+            'Body': {'Text': {'Data': body, 'Charset': 'UTF-8'}},
+        },
+    )
+    logger.info("Email sent to %s: %s", to_email, subject)
+
+
+def _schedule_reminder(appointment_id: str, patient_id: str, appointment_time_iso: str, delta_hours: int) -> None:
+    """Schedule a reminder via EventBridge Scheduler."""
+    import boto3, os
+    from datetime import datetime, timezone as tz, timedelta
+
+    try:
+        appt_time = datetime.fromisoformat(appointment_time_iso.replace('Z', '+00:00'))
+    except Exception:
+        logger.error("Cannot parse appointment_time: %s", appointment_time_iso)
+        return
+
+    remind_at = appt_time - timedelta(hours=delta_hours)
+    now = datetime.now(tz.utc)
+
+    if remind_at <= now:
+        logger.info("Reminder %dh for appt %s is in the past, skipping", delta_hours, appointment_id)
+        return
+
+    label = f"{delta_hours}h"
+    schedule_name = f"appt-{appointment_id[:8]}-{label}"
+    sqs_arn = os.getenv('NOTIFICATION_SQS_ARN', '')
+    role_arn = os.getenv('SCHEDULER_ROLE_ARN', '')
+
+    if not sqs_arn or not role_arn:
+        logger.warning("NOTIFICATION_SQS_ARN or SCHEDULER_ROLE_ARN not set; skipping reminder schedule")
+        return
+
+    message = json.dumps({
+        'event_type': 'appointment.reminder',
+        'payload': {
+            'appointment_id': appointment_id,
+            'patient_id': patient_id,
+            'reminder_type': label,
+            'appointment_time': appointment_time_iso,
+        }
+    })
+
+    try:
+        scheduler = boto3.client('scheduler', region_name=os.getenv('AWS_REGION', 'us-east-1'))
+        scheduler.create_schedule(
+            Name=schedule_name,
+            ScheduleExpression=f"at({remind_at.strftime('%Y-%m-%dT%H:%M:%S')})",
+            ScheduleExpressionTimezone='UTC',
+            FlexibleTimeWindow={'Mode': 'OFF'},
+            ActionAfterCompletion='DELETE',
+            Target={
+                'Arn': sqs_arn,
+                'RoleArn': role_arn,
+                'Input': message,
+            },
+        )
+        logger.info("Scheduled %s reminder for appt %s at %s", label, appointment_id, remind_at.isoformat())
+    except Exception as exc:
+        logger.error("EventBridge Scheduler failed for %s-%s: %s", appointment_id, label, exc)
+
+
+def handle_appointment_created(payload: dict) -> bool:
+    """Send immediate confirmation + schedule 24h and 1h reminders."""
+    appointment_id = payload.get('appointment_id', '')
+    patient_id = payload.get('patient_id', '')
+    appointment_time = payload.get('appointment_time', '')
+    status = payload.get('status', 'scheduled')
+
+    if not patient_id:
+        logger.warning("appointment.created missing patient_id; dropping.")
+        return True
+
+    patient_email = _get_user_email_from_cognito(str(patient_id))
+
+    # 1. Immediate confirmation email
+    if patient_email:
+        from datetime import datetime
+        try:
+            dt = datetime.fromisoformat(appointment_time.replace('Z', '+00:00'))
+            appt_str = dt.strftime('%A, %B %d %Y at %H:%M UTC')
+        except Exception:
+            appt_str = appointment_time
+
+        subject = "Appointment Confirmed"
+        body = (
+            f"Your appointment has been successfully booked.\n\n"
+            f"Date & Time: {appt_str}\n"
+            f"Appointment ID: {appointment_id}\n"
+            f"Status: {status}\n\n"
+            f"You will receive reminders 24 hours and 1 hour before your appointment.\n"
+        )
+        try:
+            _send_email_via_ses(patient_email, subject, body)
+        except Exception as exc:
+            logger.error("SES send failed for %s: %s", patient_email, exc)
+
+    # 2. Schedule reminders (24h and 1h before)
+    if appointment_time:
+        _schedule_reminder(appointment_id, patient_id, appointment_time, delta_hours=24)
+        _schedule_reminder(appointment_id, patient_id, appointment_time, delta_hours=1)
+
+    # 3. Save to DB
+    try:
+        from api.models import Notification
+        Notification.objects.create(
+            recipient_id=patient_id,
+            recipient_email=patient_email or '',
+            notification_type='appointment_confirmed',
+            channel='email',
+            subject='Appointment Confirmed',
+            message=f"Appointment {appointment_id} confirmed for {appointment_time}.",
+            related_entity_type='appointment',
+            related_entity_id=appointment_id,
+            sent_at=timezone.now(),
+        )
+    except Exception as exc:
+        logger.error("Failed to save notification to DB: %s", exc)
+
+    return True
+
+
+def handle_appointment_reminder(payload: dict) -> bool:
+    """Send reminder email (triggered by EventBridge Scheduler)."""
+    appointment_id = payload.get('appointment_id', '')
+    patient_id = payload.get('patient_id', '')
+    reminder_type = payload.get('reminder_type', '')
+    appointment_time = payload.get('appointment_time', '')
+
+    if not patient_id:
+        return True
+
+    patient_email = _get_user_email_from_cognito(str(patient_id))
+    if not patient_email:
+        logger.warning("No email found for patient_id=%s", patient_id)
+        return True
+
+    from datetime import datetime
+    try:
+        dt = datetime.fromisoformat(appointment_time.replace('Z', '+00:00'))
+        appt_str = dt.strftime('%A, %B %d %Y at %H:%M UTC')
+    except Exception:
+        appt_str = appointment_time
+
+    if reminder_type == '24h':
+        subject = "Appointment Reminder – Tomorrow"
+        body = f"Reminder: You have an appointment tomorrow.\n\nDate & Time: {appt_str}\nAppointment ID: {appointment_id}\n"
+    else:
+        subject = "Appointment Reminder – In 1 Hour"
+        body = f"Reminder: Your appointment is in 1 hour.\n\nDate & Time: {appt_str}\nAppointment ID: {appointment_id}\n"
+
+    try:
+        _send_email_via_ses(patient_email, subject, body)
+    except Exception as exc:
+        logger.error("SES reminder failed for %s: %s", patient_email, exc)
+        raise  # retriable
+
+    try:
+        from api.models import Notification
+        Notification.objects.create(
+            recipient_id=patient_id,
+            recipient_email=patient_email,
+            notification_type='appointment_reminder',
+            channel='email',
+            subject=subject,
+            message=body,
+            related_entity_type='appointment',
+            related_entity_id=appointment_id,
+            sent_at=timezone.now(),
+        )
+    except Exception as exc:
+        logger.error("Failed to save reminder notification: %s", exc)
+
+    return True
+
+
+def handle_file_uploaded(payload: dict) -> bool:
+    """Notify user when a file is uploaded."""
+    file_id = payload.get('file_id', '')
+    user_id = payload.get('user_id', '')
+    original_name = payload.get('original_name', 'file')
+
+    if not user_id:
+        return True
+
+    user_email = _get_user_email_from_cognito(str(user_id))
+    if user_email:
+        try:
+            _send_email_via_ses(
+                user_email,
+                "File Uploaded Successfully",
+                f"Your file '{original_name}' (ID: {file_id}) has been uploaded successfully.",
+            )
+        except Exception as exc:
+            logger.error("SES send failed: %s", exc)
+
+    return True
+
+
 # ── Registry consumed by api/management/commands/consume_events.py ───────────
 HANDLERS: dict[str, Callable[[dict], bool]] = {
     "payment.success": handle_payment_success,
+    "appointment.created": handle_appointment_created,
+    "appointment.reminder": handle_appointment_reminder,
+    "file.uploaded": handle_file_uploaded,
 }
