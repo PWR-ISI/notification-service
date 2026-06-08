@@ -14,5 +14,6 @@ RUN pip install --upgrade pip && pip install -r /app/requirements.txt || true
 
 COPY . /app
 
+ENV DJANGO_SETTINGS_MODULE=settings
 EXPOSE 8000
-CMD ["python", "manage.py", "runserver", "0.0.0.0:8000"]
+CMD ["sh", "-c", "python manage.py makemigrations --noinput; python manage.py migrate --noinput; python manage.py runserver 0.0.0.0:8000"]
