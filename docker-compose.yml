@@ -2,7 +2,7 @@ services:
   app:
     build: .
     container_name: notification-service
-    command: gunicorn notification.wsgi:application --bind 0.0.0.0:8000
+    command: gunicorn config.wsgi:application --bind 0.0.0.0:8000
     volumes:
       - .:/app
     env_file:

@@ -7,3 +7,4 @@ boto3>=1.28.0
 gunicorn>=20.1.0
 psycopg2-binary>=2.9.0
 drf-spectacular>=0.26.0
+PyJWT>=2.8.0
