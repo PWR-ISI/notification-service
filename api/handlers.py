@@ -25,36 +25,67 @@ def _fmt(iso_str):
         return iso_str or ""
 
 
-def on_appointment_created(payload, envelope=None):
-    """appointment-service emits 'appointment.created' after booking a visit."""
-    patient_id = payload.get("patient_id")
+def _make(patient_id, appointment_id, ntype, subject, message):
+    """Create a notification, idempotent per (appointment, type)."""
     if not patient_id:
-        logger.warning("appointment.created without patient_id; ignoring.")
+        logger.warning("event without patient_id; ignoring.")
         return
-
-    appointment_id = payload.get("appointment_id")
-    # Idempotency: don't duplicate if we already notified about this appointment.
     if appointment_id and Notification.objects.filter(
         recipient_id=patient_id,
         related_entity_type="appointment",
         related_entity_id=appointment_id,
+        notification_type=ntype,
     ).exists():
-        logger.info("Notification for appointment %s already exists; skipping.", appointment_id)
+        logger.info("Notification (%s) for appointment %s already exists; skipping.", ntype, appointment_id)
         return
-
-    when = _fmt(payload.get("scheduled_start"))
     Notification.objects.create(
         recipient_id=patient_id,
-        notification_type="appointment_confirmed",
+        notification_type=ntype,
         channel="in_app",
-        subject="Wizyta umówiona",
-        message=f"Twoja wizyta została umówiona na {when}. Status: oczekuje na płatność.",
+        subject=subject,
+        message=message,
         related_entity_type="appointment",
         related_entity_id=appointment_id,
     )
-    logger.info("Created notification for patient %s (appointment.created)", patient_id)
+    logger.info("Created %s notification for patient %s", ntype, patient_id)
+
+
+def on_appointment_created(payload, envelope=None):
+    """appointment-service emits 'appointment.created' after booking a visit."""
+    when = _fmt(payload.get("scheduled_start"))
+    _make(
+        payload.get("patient_id"), payload.get("appointment_id"),
+        "appointment_confirmed", "Wizyta umówiona",
+        f"Twoja wizyta została umówiona na {when}. Status: oczekuje na płatność.",
+    )
+
+
+def on_appointment_cancelled(payload, envelope=None):
+    """appointment-service emits 'appointment.cancelled' when a visit is cancelled."""
+    when = _fmt(payload.get("scheduled_start"))
+    reason = (payload.get("reason") or "").strip()
+    msg = f"Twoja wizyta z dnia {when} została odwołana."
+    if reason:
+        msg += f" Powód: {reason}."
+    msg += " Możesz umówić nowy termin w portalu."
+    _make(
+        payload.get("patient_id"), payload.get("appointment_id"),
+        "appointment_cancelled", "Wizyta odwołana", msg,
+    )
+
+
+def on_appointment_paid(payload, envelope=None):
+    """appointment-service emits 'appointment.paid' after successful payment."""
+    when = _fmt(payload.get("scheduled_start"))
+    _make(
+        payload.get("patient_id"), payload.get("appointment_id"),
+        "payment_received", "Płatność potwierdzona",
+        f"Otrzymaliśmy płatność za wizytę z dnia {when}. Wizyta jest potwierdzona.",
+    )
 
 
 HANDLERS = {
     "appointment.created": on_appointment_created,
+    "appointment.cancelled": on_appointment_cancelled,
+    "appointment.paid": on_appointment_paid,
 }
