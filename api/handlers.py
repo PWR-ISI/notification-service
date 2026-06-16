@@ -7,16 +7,20 @@ Each handler turns a domain event from another service into a Notification row.
 """
 import logging
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from api.models import Notification
 
 logger = logging.getLogger(__name__)
 
+LOCAL_TZ = ZoneInfo("Europe/Warsaw")
+
 
 def _fmt(iso_str):
+    """Format an ISO timestamp (stored in UTC) in local Polish time."""
     try:
         dt = datetime.fromisoformat((iso_str or "").replace("Z", "+00:00"))
-        return dt.strftime("%d.%m.%Y, %H:%M")
+        return dt.astimezone(LOCAL_TZ).strftime("%d.%m.%Y, %H:%M")
     except Exception:
         return iso_str or ""
 
