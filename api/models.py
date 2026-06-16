@@ -19,7 +19,7 @@ class Notification(models.Model):
         ('in_app', 'In-App'),
     )
 
-    recipient_id = models.IntegerField(db_index=True)
+    recipient_id = models.CharField(max_length=64, db_index=True)
     recipient_email = models.EmailField(blank=True)
     recipient_phone = models.CharField(max_length=20, blank=True)
     notification_type = models.CharField(max_length=50, choices=NOTIFICATION_TYPES)
@@ -27,7 +27,7 @@ class Notification(models.Model):
     subject = models.CharField(max_length=255)
     message = models.TextField()
     related_entity_type = models.CharField(max_length=50, blank=True)
-    related_entity_id = models.IntegerField(null=True, blank=True)
+    related_entity_id = models.CharField(max_length=64, null=True, blank=True)
     is_read = models.BooleanField(default=False, db_index=True)
     sent_at = models.DateTimeField(null=True, blank=True)
     read_at = models.DateTimeField(null=True, blank=True)
@@ -65,7 +65,7 @@ class NotificationTemplate(models.Model):
 
 
 class NotificationPreference(models.Model):
-    user_id = models.IntegerField(unique=True, db_index=True)
+    user_id = models.CharField(max_length=64, unique=True, db_index=True)
     email_notifications = models.BooleanField(default=True)
     sms_notifications = models.BooleanField(default=True)
     push_notifications = models.BooleanField(default=True)
