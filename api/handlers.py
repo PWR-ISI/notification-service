@@ -58,6 +58,12 @@ def on_appointment_created(payload, envelope=None):
         "appointment_confirmed", "Wizyta umówiona",
         f"Twoja wizyta została umówiona na {when}. Status: oczekuje na płatność.",
     )
+    # Also let the doctor know a new visit landed in their calendar.
+    _make(
+        payload.get("doctor_id"), payload.get("appointment_id"),
+        "appointment_confirmed", "Nowa wizyta",
+        f"Nowa wizyta została umówiona na {when}.",
+    )
 
 
 def on_appointment_cancelled(payload, envelope=None):
@@ -71,6 +77,13 @@ def on_appointment_cancelled(payload, envelope=None):
     _make(
         payload.get("patient_id"), payload.get("appointment_id"),
         "appointment_cancelled", "Wizyta odwołana", msg,
+    )
+    doc_msg = f"Wizyta z dnia {when} została odwołana."
+    if reason:
+        doc_msg += f" Powód: {reason}."
+    _make(
+        payload.get("doctor_id"), payload.get("appointment_id"),
+        "appointment_cancelled", "Wizyta odwołana", doc_msg,
     )
 
 

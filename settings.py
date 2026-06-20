@@ -68,4 +68,8 @@ REST_FRAMEWORK = {
 }
 
 CORS_ALLOWED_ORIGINS = os.getenv('CORS_ALLOWED_ORIGINS', 'http://localhost:3000,http://127.0.0.1:3000').split(',')
-CORS_ALLOW_CREDENTIALS = True
+CORS_ALLOW_ALL_ORIGINS = True
+CORS_ALLOW_CREDENTIALS = False
+
+# Shared secret for internal service-to-service calls (e.g. schedule -> /api/v2/events/).
+INTERNAL_SHARED_TOKEN = os.getenv('INTERNAL_SHARED_TOKEN', 'dev-internal-token')

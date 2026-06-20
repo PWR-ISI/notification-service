@@ -1,10 +1,38 @@
+import logging
+
 from rest_framework import viewsets, status
-from rest_framework.decorators import action
+from rest_framework.decorators import action, api_view, permission_classes, authentication_classes
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, AllowAny
+from django.conf import settings
 from django.utils import timezone
 from .models import Notification, NotificationTemplate, NotificationPreference
 from .serializers import NotificationSerializer, NotificationTemplateSerializer, NotificationPreferenceSerializer
+from .handlers import HANDLERS
+
+logger = logging.getLogger(__name__)
+
+
+@api_view(['POST'])
+@authentication_classes([])
+@permission_classes([AllowAny])
+def ingest_event(request):
+    """Internal endpoint: other services POST a domain event ({event_type, payload}) here
+    and we turn it into a notification via the same HANDLERS the SQS consumer uses.
+    Authenticated with the shared internal token (no user JWT)."""
+    if request.headers.get('X-Internal-Token') != getattr(settings, 'INTERNAL_SHARED_TOKEN', 'dev-internal-token'):
+        return Response({'detail': 'forbidden'}, status=status.HTTP_403_FORBIDDEN)
+    event_type = request.data.get('event_type')
+    payload = request.data.get('payload') or {}
+    handler = HANDLERS.get(event_type)
+    if not handler:
+        return Response({'status': 'ignored', 'event_type': event_type})
+    try:
+        handler(payload)
+    except Exception as exc:  # noqa: BLE001 - never fail the caller
+        logger.error('Handler for %s failed: %s', event_type, exc)
+        return Response({'status': 'error', 'detail': str(exc)}, status=status.HTTP_200_OK)
+    return Response({'status': 'ok'})
 
 
 class HealthCheckView(viewsets.ViewSet):
