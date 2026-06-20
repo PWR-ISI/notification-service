@@ -84,8 +84,42 @@ def on_appointment_paid(payload, envelope=None):
     )
 
 
+def on_appointment_completed(payload, envelope=None):
+    """schedule-service emits 'appointment.completed' when a doctor finishes a visit."""
+    when = _fmt(payload.get("scheduled_start"))
+    summary = (payload.get("visit_summary") or "").strip()
+    msg = f"Twoja wizyta z dnia {when} została zakończona."
+    if summary:
+        msg += f" Podsumowanie: {summary}"
+    _make(
+        payload.get("patient_id"), payload.get("appointment_id"),
+        "appointment_completed", "Wizyta zakończona", msg,
+    )
+
+
+def on_payment_succeeded(payload, envelope=None):
+    """payment-service emits 'payment.succeeded' after a confirmed PayU payment."""
+    _make(
+        payload.get("patient_id"), payload.get("appointment_id"),
+        "payment_received", "Płatność potwierdzona",
+        "Otrzymaliśmy płatność za Twoją wizytę. Wizyta jest potwierdzona.",
+    )
+
+
+def on_payment_refunded(payload, envelope=None):
+    """payment-service emits 'payment.refunded' after a refund for a cancelled visit."""
+    _make(
+        payload.get("patient_id"), payload.get("appointment_id"),
+        "payment_refunded", "Zwrot płatności",
+        "Płatność za odwołaną wizytę została zwrócona.",
+    )
+
+
 HANDLERS = {
     "appointment.created": on_appointment_created,
     "appointment.cancelled": on_appointment_cancelled,
     "appointment.paid": on_appointment_paid,
+    "appointment.completed": on_appointment_completed,
+    "payment.succeeded": on_payment_succeeded,
+    "payment.refunded": on_payment_refunded,
 }
