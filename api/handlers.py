@@ -3,17 +3,51 @@ Event handlers for notification-service.
 
 The consume_events command looks up an event_type in HANDLERS and invokes the
 matching handler. Handlers must be idempotent: SQS may redeliver the same event.
-Each handler turns a domain event from another service into a Notification row.
+Each handler turns a domain event from another service into a Notification row
+and optionally sends an email if SMTP is configured.
 """
 import logging
 from datetime import datetime
 from zoneinfo import ZoneInfo
+
+import requests
+from django.conf import settings
+from django.core.mail import send_mail
 
 from api.models import Notification
 
 logger = logging.getLogger(__name__)
 
 LOCAL_TZ = ZoneInfo("Europe/Warsaw")
+
+
+def _get_user_email(user_id: str) -> str | None:
+    """Fetch user email from auth-service. Returns None on any error."""
+    if not user_id:
+        return None
+    try:
+        url = f"{settings.AUTH_SERVICE_URL}/users/{user_id}/"
+        resp = requests.get(url, timeout=3)
+        if resp.ok:
+            return resp.json().get("email")
+    except Exception:
+        pass
+    return None
+
+
+def _send_email_safe(recipient_id: str, subject: str, message: str, email: str = None) -> None:
+    """Send email to user if SMTP is configured. Non-fatal."""
+    if settings.EMAIL_BACKEND == 'django.core.mail.backends.console.EmailBackend':
+        return
+    if not email:
+        email = _get_user_email(recipient_id)
+    if not email:
+        return
+    try:
+        send_mail(subject, message, settings.DEFAULT_FROM_EMAIL, [email], fail_silently=True)
+        logger.info("Email sent to %s: %s", email, subject)
+    except Exception:
+        logger.exception("Failed to send email to %s", email)
 
 
 def _fmt(iso_str):
@@ -25,13 +59,13 @@ def _fmt(iso_str):
         return iso_str or ""
 
 
-def _make(patient_id, appointment_id, ntype, subject, message):
-    """Create a notification, idempotent per (appointment, type)."""
-    if not patient_id:
-        logger.warning("event without patient_id; ignoring.")
+def _make(recipient_id, appointment_id, ntype, subject, message, email=None):
+    """Create a notification, idempotent per (appointment, type), and send email."""
+    if not recipient_id:
+        logger.warning("event without recipient_id; ignoring.")
         return
     if appointment_id and Notification.objects.filter(
-        recipient_id=patient_id,
+        recipient_id=recipient_id,
         related_entity_type="appointment",
         related_entity_id=appointment_id,
         notification_type=ntype,
@@ -39,7 +73,7 @@ def _make(patient_id, appointment_id, ntype, subject, message):
         logger.info("Notification (%s) for appointment %s already exists; skipping.", ntype, appointment_id)
         return
     Notification.objects.create(
-        recipient_id=patient_id,
+        recipient_id=recipient_id,
         notification_type=ntype,
         channel="in_app",
         subject=subject,
@@ -47,18 +81,20 @@ def _make(patient_id, appointment_id, ntype, subject, message):
         related_entity_type="appointment",
         related_entity_id=appointment_id,
     )
-    logger.info("Created %s notification for patient %s", ntype, patient_id)
+    logger.info("Created %s notification for %s", ntype, recipient_id)
+    _send_email_safe(recipient_id, subject, message, email=email)
 
 
 def on_appointment_created(payload, envelope=None):
     """appointment-service emits 'appointment.created' after booking a visit."""
     when = _fmt(payload.get("scheduled_start"))
+    patient_email = payload.get("patient_email", "")
     _make(
         payload.get("patient_id"), payload.get("appointment_id"),
         "appointment_confirmed", "Wizyta umówiona",
         f"Twoja wizyta została umówiona na {when}. Status: oczekuje na płatność.",
+        email=patient_email,
     )
-    # Also let the doctor know a new visit landed in their calendar.
     _make(
         payload.get("doctor_id"), payload.get("appointment_id"),
         "appointment_confirmed", "Nowa wizyta",

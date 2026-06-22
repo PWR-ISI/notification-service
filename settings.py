@@ -1,6 +1,9 @@
 import os
 from pathlib import Path
 from datetime import timedelta
+from dotenv import load_dotenv
+
+load_dotenv(Path(__file__).resolve().parent / ".env")
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = os.getenv('SECRET_KEY', 'django-insecure-notification-key')
@@ -38,17 +41,10 @@ WSGI_APPLICATION = 'config.wsgi.application'
 
 DATABASES = {
     'default': {
-        'ENGINE': 'django.db.backends.postgresql' if os.getenv('DB_ENGINE') == 'postgresql' else 'django.db.backends.sqlite3',
-        'NAME': os.getenv('DB_NAME', 'notification_db'),
-        'USER': os.getenv('DB_USER', 'postgres'),
-        'PASSWORD': os.getenv('DB_PASSWORD', 'password'),
-        'HOST': os.getenv('DB_HOST', 'localhost'),
-        'PORT': os.getenv('DB_PORT', '5432'),
+        'ENGINE': 'django.db.backends.sqlite3',
+        'NAME': BASE_DIR / 'db.sqlite3',
     }
 }
-
-if os.getenv('DB_ENGINE') != 'postgresql':
-    DATABASES['default']['NAME'] = BASE_DIR / 'db.sqlite3'
 
 AUTH_PASSWORD_VALIDATORS = [
     {'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator'},
@@ -73,3 +69,20 @@ CORS_ALLOW_CREDENTIALS = False
 
 # Shared secret for internal service-to-service calls (e.g. schedule -> /api/v2/events/).
 INTERNAL_SHARED_TOKEN = os.getenv('INTERNAL_SHARED_TOKEN', 'dev-internal-token')
+
+# Auth-service URL for resolving user emails when sending notifications
+AUTH_SERVICE_URL = os.getenv('AUTH_SERVICE_URL', 'http://localhost:8001/api/v2')
+
+# ── Email (SMTP) ──────────────────────────────────────────────────────────────
+_smtp_host = os.getenv('EMAIL_HOST', '')
+if _smtp_host:
+    EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+    EMAIL_HOST = _smtp_host
+    EMAIL_PORT = int(os.getenv('EMAIL_PORT', '465'))
+    EMAIL_HOST_USER = os.getenv('EMAIL_HOST_USER', '')
+    EMAIL_HOST_PASSWORD = os.getenv('EMAIL_HOST_PASSWORD', '')
+    EMAIL_USE_SSL = EMAIL_PORT == 465
+    EMAIL_USE_TLS = EMAIL_PORT == 587
+else:
+    EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
+DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL', 'medical@manderla.dev')
